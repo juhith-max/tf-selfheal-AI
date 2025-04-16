@@ -5,6 +5,8 @@ import os
 import sys
 import io
 import ollama
+import shutil
+from datetime import datetime
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -19,9 +21,19 @@ def run_terraform():
     result = subprocess.run(["terraform.exe", "apply", "-auto-approve"], capture_output=True, text=True, cwd=TERRAFORM_DIR)
     return result.returncode, result.stderr
 
-def extract_code_block(text):
-    match = re.search(r"```(?:hcl)?\s*(.*?)```", text, re.DOTALL)
-    return match.group(1).strip() if match else text.strip()
+def extract_code_block(ai_response):
+    # Extract the first code block (```...```)
+    matches = re.findall(r"```(?:hcl|terraform)?\s*([\s\S]+?)```", ai_response)
+    if matches:
+        return matches[0].strip()
+    
+    # Fallback: extract from # main.tf and downward
+    fallback = re.search(r"(#\s*main\.tf[\s\S]+)", ai_response)
+    if fallback:
+        return fallback.group(1).strip()
+
+    # If nothing found, assume entire response is raw code
+    return ai_response.strip()
 
 def collect_terraform_code():
     code_blocks = []
@@ -45,46 +57,88 @@ def is_valid_terraform_code(code):
     os.remove(temp_file)
     return result.returncode == 0
 
-def run_llm_fix(error_output):
-    code_blocks = collect_terraform_code()
-    combined_code = "\n\n".join([f"// File: {fname}\n{code}" for fname, code in code_blocks])
+# def run_llm_fix(error_output):
+    # code_blocks = collect_terraform_code()
+    # combined_code = "\n\n".join([f"// File: {fname}\n{code}" for fname, code in code_blocks])
 
-    if len(combined_code) > MAX_CODE_CHARS:
-        combined_code = combined_code[:MAX_CODE_CHARS] + "\n// Code truncated..."
+    # prompt = f"""
+    # You are a Terraform expert. The following Terraform code caused this error during apply:
+
+    # ---BEGIN ERROR---
+    # {error_output}
+    # ---END ERROR---
+
+    # The error is likely due to an invalid argument. Fix only the invalid part of the code related to the error. Do not change anything else in the code. Return only the corrected Terraform code, focusing only on the parts related to the error (e.g., removing or correcting the invalid argument).
+    # Return only the fixed Terraform code. Do not include explanations or markdown code fences (like or hcl). Just the raw code.
+    # Return ONLY the corrected Terraform code, without explanation or markdown formatting.
+    # ---BEGIN CODE---
+    # {combined_code}
+    # ---END CODE---
+    # """
+
+    # response = ollama.chat(model=LLM_MODEL, messages=[{"role": "user", "content": prompt}])
+    # raw = response['message']['content']
+    
+    # print(f"Raw AI Response: {raw}")  # Debugging: Print the raw response
+
+    # # Extract the code from AI response
+    # fixed_code = extract_code_block(raw)
+    
+    # # Check if the fixed code is valid Terraform code
+    # if not is_valid_terraform_code(fixed_code):
+    #     print("AI did not return valid Terraform code. Exiting.")
+    #     return None
+
+    # print(f"\nAI Response:\n{fixed_code}\n")
+    # return fixed_code
+def extract_terraform_code(response):
+    # Try to extract from triple backtick blocks first
+    code_blocks = re.findall(r"```(?:hcl|terraform)?\s*([\s\S]+?)```", response)
+    if code_blocks:
+        return code_blocks[0].strip()
+
+    # Fallback: look for anything starting with a resource block
+    fallback = re.search(r'(resource\s+"[^"]+"\s+"[^"]+"\s+\{[\s\S]+?\})', response)
+    if fallback:
+        return fallback.group(1).strip()
+
+    return None  # No valid code found    
+def run_llm_fix(error_message):
+    print("Sending prompt to AI...")
 
     prompt = f"""
-You are a Terraform expert. This code failed with this error:
+The following Terraform validation error occurred:
 
-{error_output}
+{error_message}
 
-Fix only the broken lines. Do not change anything else. Return just the corrected code inside one code block.
-
-{combined_code}
+Fix the code accordingly. Return ONLY the corrected Terraform code without explanation. Do NOT use triple backticks or markdown formatting.
 """
 
-    print("Sending prompt to AI...")
-    response = ollama.chat(model=LLM_MODEL, messages=[{"role": "user", "content": prompt}])
-    raw = response['message']['content']
+    response = ollama.chat(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}]
+    )
 
-    print("AI response received.")
-    fixed_code = extract_code_block(raw)
-    if not is_valid_terraform_code(fixed_code):
-        print("AI returned invalid Terraform code.")
+    print("Raw AI Response:", response['message']['content'])
+
+    fixed_code = extract_terraform_code(response['message']['content'])
+
+    if not fixed_code:
+        print("AI did not return valid Terraform code. Exiting.")
         return None
 
     return fixed_code
-
-def overwrite_code(fixed_code):
-    output_path = os.path.join(TERRAFORM_DIR, "main.tf")
-    backup_path = os.path.join(TERRAFORM_DIR, "main_backup.tf")
-
+def overwrite_code(fixed_code, output_path="./terraform/main_fixed.tf"):
+    # Backup current fixed code if it already exists
     if os.path.exists(output_path):
-        os.rename(output_path, backup_path)
-        print(f"Backup saved: {backup_path}")
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        backup_path = f"{output_path.replace('.tf', '')}_backup_{timestamp}.tf"
+        shutil.move(output_path, backup_path)
+        print(f"Existing fixed file backed up at {backup_path}")
 
-    with open(output_path, "w", encoding="utf-8") as f:
+    with open(output_path, "w") as f:
         f.write(fixed_code)
-    print("Fixed code written to main.tf")
+        print(f"Fixed code written to {output_path}")
 
 def validate_terraform():
     for attempt in range(5):
