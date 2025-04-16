@@ -1,4 +1,4 @@
-Terraform AI Self-Healing Script 🤖
+### Terraform AI Self-Healing Script 🤖
 
 This project uses AI (via Ollama + LLM) to automatically identify and fix errors in Terraform code.
 
@@ -71,4 +71,3 @@ resource "aws_instance" "example" {
 ## 🧾 License
 
 MIT - feel free to use and modify!
-```
