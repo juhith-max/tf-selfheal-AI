@@ -1,2 +1,6 @@
 # tf-selfheal-AI
-This code self heals all your terraform code at the time of git push.
+This code self heals all your terraform code.
+Pull this 
+'''
+ollama pull codellama:7b
+'''
