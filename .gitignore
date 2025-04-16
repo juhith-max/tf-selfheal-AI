@@ -4,3 +4,4 @@ terraform.exe
 terraform/.terraform
 terraform/.terraform.exe
 terraform/.terraform.lock.hcl
+.gitignore
