@@ -1,4 +1,4 @@
-### Terraform AI Self-Healing Script 🤖
+# Terraform AI Self-Healing Script 🤖
 
 This project uses AI (via Ollama + LLM) to automatically identify and fix errors in Terraform code.
 
